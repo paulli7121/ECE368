@@ -1,0 +1,448 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include "huff.h"
+
+void header_read(FILE* fp, int* topology_num, int* total_ch);
+tree_node* build_tree(FILE* fp, int topology_num);
+link_node* build_link_node(tree_node* element, link_node* next);
+tree_node* pop_link_node(link_node** head, link_node** free_node);
+void add_link_node(link_node** link_head, tree_node* element);
+tree_node* build_tree_node(char ch, tree_node* left, tree_node* right);
+int check_finish(link_node* link_head);
+void read_tree(tree_node* tree_head);
+void print_link_list(link_node* head);
+int read_bit(unsigned char* count, FILE* fp, unsigned char* current_byte);
+void decode(FILE* fp, FILE* fp2, tree_node* head, int total_ch);
+void print_tree(tree_node* tree_head, int level, FILE* fp3, char* a);
+int find_level(tree_node* head);
+void free_tree(tree_node* head);
+tree_node* build_tree_bi(FILE* fp, int topology_num);
+void read_char_bi(FILE* fp, int* header_char, int topology_num);
+char read_header_char(int* reader, int mode, int* header_ch);
+
+
+
+int main(int argc, char** argv){
+
+	if(argc < 2){
+		printf("Error\n");
+		return EXIT_FAILURE;
+	}
+
+	if(strcmp(argv[1],"-c") == 0){
+		//get the number of characters
+		FILE* fp = fopen(argv[2], "r");
+		//char* file = argv[2];
+		int topology_num;
+		int total_ch;
+	
+		header_read(fp, &topology_num, &total_ch);
+		
+
+		//build the tree
+		tree_node* tree_head;
+		tree_head = build_tree(fp, topology_num);
+
+		//print the huffman code for each character
+		FILE* fp3 = fopen(argv[3], "w");
+		int level_count = 0;
+		tree_node* tem_pointer = tree_head;
+		level_count = find_level(tem_pointer) + 1;
+		
+		char* a = malloc(sizeof(char) * level_count);	
+		print_tree(tree_head, 0, fp3, a);
+		free(a);
+
+		//decode the compressed file
+		FILE* fp2 = fopen(argv[4], "w");
+		decode(fp,fp2, tree_head, total_ch);
+
+		free_tree(tree_head);
+		fclose(fp);
+		fclose(fp2);
+		fclose(fp3);
+		
+	}
+	else if(strcmp(argv[1], "-b") == 0){
+
+		//get the number of characters
+		FILE* fp = fopen(argv[2], "r");
+		int topology_num;
+		int total_ch;
+	
+		header_read(fp, &topology_num, &total_ch);
+		//build the tree
+		tree_node* tree_head;
+		tree_head = build_tree_bi(fp, topology_num);
+		//read_tree(tree_head);
+
+		//decode the compressed file
+		FILE* fp2 = fopen(argv[3], "w");
+		decode(fp,fp2, tree_head, total_ch);
+
+		free_tree(tree_head);
+		fclose(fp);
+		fclose(fp2);
+		
+	}
+
+	return EXIT_SUCCESS;
+
+}
+
+void header_read(FILE* fp, int* topology_num, int* total_ch){
+	
+	long num = 0;
+	int ret;
+	
+	ret = fread(&num, sizeof(long), 1, fp);
+	ret = fread(&num, sizeof(long), 1, fp);
+	*topology_num = (int)num;
+	ret = fread(&num, sizeof(long), 1, fp);
+	*total_ch = (int)num;
+	
+
+	
+
+}
+
+tree_node* build_tree(FILE* fp, int topology_num){
+	
+	
+	link_node* link_head = NULL;     //head of the stack(link list)
+	tree_node* tree_head = NULL;     //head of the huffman tree
+	tree_node* element = NULL;       //tree node use to store the node value while building the link list
+	link_node* free_node = NULL;
+	char current_char;
+	int check;                       //used to check the completion of building huffman tree
+	int ret;
+	
+	//begin to read topology
+	for(int j = 0; j < topology_num; j++){
+		ret = fread(&current_char, sizeof(char), 1, fp);
+		if(current_char == '1'){      // it is leaf node
+			ret = fread(&current_char, sizeof(char), 1, fp);
+			j++;                    //read one char again
+			element = build_tree_node(current_char, NULL, NULL);
+			
+			add_link_node(&link_head, element);
+			//check
+			//print_link_list(link_head);
+			
+		}
+		else if(current_char == '0'){ // it is root node
+			
+
+			check = check_finish(link_head);
+			if(check == 0){
+				tree_head = pop_link_node(&link_head, &free_node);
+				free(free_node);
+				
+				break;
+			}
+	
+			tree_node* right = pop_link_node(&link_head, &free_node);
+			free(free_node);
+			
+			tree_node* left = pop_link_node(&link_head, &free_node);
+			free(free_node);
+			
+			element = build_tree_node('0', left, right);
+			add_link_node(&link_head, element);
+			//check
+			//print_link_list(link_head);
+		}
+	}
+	
+	return tree_head;
+}
+
+tree_node* build_tree_bi(FILE* fp, int topology_num){
+	link_node* link_head = NULL;     //head of the stack(link list)
+	tree_node* tree_head = NULL;     //head of the huffman tree
+	tree_node* element = NULL;       //tree node use to store the node value while building the link list
+	link_node* free_node = NULL;     //used to free the link node has been pop out	
+	char current_char;
+	char current_bit;
+	int reader = 0;
+	
+	int check;                       //used to check the completion of building huffman tree
+	
+
+	int* header_char = malloc(sizeof(int) * topology_num * 8);
+	
+	read_char_bi(fp, header_char, topology_num);
+	
+	for(int j = 0; j < topology_num * 8; j++){
+		
+		current_bit = read_header_char(&reader, 0, header_char);
+		
+		if(current_bit == '1'){      // it is leaf node
+			
+			current_char = read_header_char(&reader, 1, header_char);
+			
+			j = j + 1;                    //read one char again
+			
+			element = build_tree_node(current_char, NULL, NULL);
+			
+			add_link_node(&link_head, element);
+			//check
+			//print_link_list(link_head);
+			
+		}
+		else if(current_bit == '0'){ // it is root node
+			
+
+			check = check_finish(link_head);
+			if(check == 0){
+				tree_head = pop_link_node(&link_head, &free_node);
+				free(free_node);
+				
+				break;
+			}
+	
+			tree_node* right = pop_link_node(&link_head, &free_node);
+			free(free_node);
+			
+			tree_node* left = pop_link_node(&link_head, &free_node);
+			free(free_node);
+			
+			element = build_tree_node('0', left, right);
+			add_link_node(&link_head, element);
+			//check
+			//print_link_list(link_head);
+		}
+	}
+
+	free(header_char);	
+	return tree_head;
+}
+
+tree_node* build_tree_node(char ch, tree_node* left, tree_node* right){
+	tree_node* new_node = malloc(sizeof(tree_node));	
+	new_node -> ch = ch;
+	new_node -> right_node = right;
+	new_node -> left_node = left;
+	return new_node;
+}
+
+link_node* build_link_node(tree_node* element, link_node* next){
+	link_node* new_node = malloc(sizeof(link_node));	
+	new_node -> element = element;
+	new_node -> next = next;
+	return new_node;
+}
+
+void add_link_node(link_node** link_head, tree_node* element){
+	if(*link_head == NULL){
+		link_node* new_node = build_link_node(element, NULL);
+		*link_head = new_node;
+	}
+	else{
+		link_node* tem_pointer = *link_head;
+		while(tem_pointer -> next != NULL){
+			tem_pointer  = tem_pointer -> next;
+		}
+		link_node* new_node = build_link_node(element, NULL);
+		tem_pointer -> next = new_node;
+	}
+}
+
+tree_node* pop_link_node(link_node** head, link_node** free_node){
+	link_node* tem_pointer = *head;
+	if(tem_pointer -> next == NULL){
+		*head = NULL;
+		*free_node = tem_pointer;
+		return tem_pointer -> element;
+		
+	}
+	while(tem_pointer -> next -> next != NULL){
+		tem_pointer = tem_pointer -> next;
+
+	}
+	link_node* tem_pointer2 = tem_pointer -> next;
+	tem_pointer -> next = NULL;
+	*free_node = tem_pointer2;
+	return tem_pointer2 -> element;
+
+}
+
+int check_finish(link_node* link_head){
+	int check = 0;
+	if(link_head -> next == NULL){
+	}
+	else{
+		check = 1;
+	}
+	return check;
+}
+
+void read_tree(tree_node* tree_head){
+	tree_node* tem_pointer = tree_head;
+	if(tem_pointer == NULL){
+		return;
+	}
+	if(tem_pointer -> ch != '0'){
+		printf("%c", tem_pointer -> ch);
+	}
+	
+	read_tree(tem_pointer -> left_node);
+	read_tree(tem_pointer -> right_node);
+}
+
+void print_link_list(link_node* head){
+	printf("current link list is: ");
+	link_node* tem_pointer = head;
+	while(tem_pointer -> next != NULL){
+		printf("%c,", tem_pointer -> element -> ch);
+		tem_pointer = tem_pointer -> next;
+	}
+	printf("%c", tem_pointer -> element -> ch);
+	printf(".\n");
+}
+
+void decode(FILE* fp, FILE* fp2, tree_node* head, int total_ch){
+	int current_bit;
+	int ch_count = 0;
+	unsigned char count = 0;
+	unsigned char current_byte;
+	tree_node* tem_pointer = head;
+
+	while(ch_count < total_ch){
+		while(tem_pointer -> left_node != NULL || tem_pointer -> right_node != NULL){
+			current_bit = read_bit(&count, fp, &current_byte);
+			
+			if(current_bit == 0){
+				tem_pointer = tem_pointer -> left_node;
+				
+			}
+			else{
+				tem_pointer = tem_pointer -> right_node;
+				
+			}
+		}
+		fputc(tem_pointer -> ch, fp2);
+		tem_pointer = head;
+		ch_count++;
+
+	}
+
+	
+}
+
+int read_bit(unsigned char* count, FILE* fp, unsigned char* current_byte){
+	
+	int ret;
+	int bit_value;
+	unsigned char value;
+	if(*count == 0){
+		ret = fread(current_byte, sizeof(unsigned char), 1, fp);
+	}
+	value = (*current_byte)>>(7 - *count);
+	value &= 1;
+	*count = ((*count) + 1) % 8;
+	if(value == 1){
+		bit_value = 1;
+	}
+	else{
+		bit_value = 0;
+	}
+	return bit_value;
+	
+} 
+
+void print_tree(tree_node* tree_head, int level, FILE* fp3, char* a){	
+	tree_node* tem_pointer = tree_head;
+
+	if(tem_pointer != NULL){
+		if(tem_pointer -> left_node == NULL && tem_pointer -> right_node == NULL){
+			int i;
+			fputc(tem_pointer -> ch, fp3);
+			fputs(":", fp3);
+			
+			for(i = 0; i < level; i++){
+				
+				fputc(a[i], fp3);
+			}
+			
+			fputs("\n", fp3);
+		}
+		else{
+			a[level] = '0';
+			print_tree(tem_pointer -> left_node, level + 1, fp3, a);
+			a[level] = '1';
+			print_tree(tem_pointer -> right_node, level + 1, fp3, a);
+		}
+	}
+	
+}
+
+int find_level(tree_node* head){
+	tree_node* tem_pointer = head;
+	if(tem_pointer == NULL){
+		return 0;
+	}
+	
+	
+	int left = find_level(tem_pointer -> left_node);
+	int right = find_level(tem_pointer -> right_node);
+	
+	if(left > right){
+		return 1 + left;
+	}
+	return 1 + right;
+}
+
+void free_tree(tree_node* head){
+	if(head != NULL){
+		free_tree(head -> left_node);
+		free_tree(head -> right_node);
+		free(head);	
+	}
+
+	return;
+}
+
+
+void read_char_bi(FILE* fp, int* header_char, int topology_num){
+	unsigned char count = 0;
+	unsigned char current_byte;
+	
+
+	for(int i = 0; i < topology_num * 8; i++){
+		header_char[i] = read_bit(&count, fp, &current_byte);
+		//printf("%d\n")
+		
+	}
+	return;
+	
+}
+
+char read_header_char(int* reader, int mode, int* header_ch){     //to translate the integer store in the header_ch array to character
+	char ret_char = '\0';
+	int i;
+	int ascii_code = 0;
+	if(mode == 0){     //read a number
+		if(header_ch[*reader] == 1){
+			ret_char = '1';
+		}
+		else{
+			ret_char = '0';
+		}
+		(*reader)++;
+	}
+	else if(mode == 1){    //read a character
+		for(i = 0; i < 8; i++){
+			//printf("reader is %d\n", *reader);
+			ascii_code = ascii_code + header_ch[*reader] * pow(2,7-i);
+			(*reader)++;
+		}
+		ret_char = (char)ascii_code;
+	}
+	return ret_char;
+}
+
+
+
